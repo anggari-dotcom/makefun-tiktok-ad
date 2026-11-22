@@ -31,6 +31,16 @@ const OUT = join(OUT_DIR, "makefun-tiktok-ad-9x16.mp4");
 const codeArg = process.argv.find((a) => a.startsWith("--code="));
 const REFERRAL_CODE = codeArg ? codeArg.slice("--code=".length) : "j4sk6235";
 
+// The code is typed into the end card by an ffmpeg drawtext filter, which
+// splits options on ':' and quotes on "'": a code with anything outside
+// letters, digits, '-' and '_' would break the filter (or render wrong),
+// so refuse it here with a clear message instead of a cryptic ffmpeg error.
+if (!/^[A-Za-z0-9_-]{1,32}$/.test(REFERRAL_CODE)) {
+  fail(
+    `invalid referral code ${JSON.stringify(REFERRAL_CODE)}: use 1-32 letters, digits, '-' or '_'.`
+  );
+}
+
 const MAIN_SECONDS = "19.5";
 
 function fail(message: string): never {
@@ -122,5 +132,25 @@ run(
   ],
   "concat"
 );
+
+// The render prints [done] even if a step silently produced a short file
+// (a narration shorter than the video, a truncated concat), so probe the
+// output's duration and refuse to call it done unless it is the full ad.
+if (!existsSync(OUT)) fail(`output missing: ${OUT}`);
+try {
+  const probe = execFileSync(
+    "ffprobe",
+    ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", OUT],
+    { encoding: "utf8" }
+  ).trim();
+  const seconds = Number(probe);
+  if (!Number.isFinite(seconds) || Math.abs(seconds - 22.5) > 0.5) {
+    fail(`output duration ${probe}s is not the expected 22.5s.`);
+  }
+} catch (error) {
+  // fail() exits the process, so a duration mismatch above never reaches
+  // here; only an ffprobe failure itself does.
+  fail(`could not probe the output duration (ffprobe): ${(error as Error).message}`);
+}
 
 console.log(`[done] wrote ${OUT} (22.5s, 1080x1920, 30fps)`);
