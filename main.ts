@@ -11,20 +11,37 @@
 // Narration: Supertonic 3, voice F1 (MIT-licensed), bundled as assets/narration.wav.
 //
 // Run it:  node main.ts [--code=YOUR_REFERRAL_CODE]
-// Output:  out/makefun-tiktok-ad-9x16.mp4
+// Output:  out/makefun-tiktok-ad-9x16.mp4 (local run) and out/VIDEO.json
 //
-// Node 22, standard library only, no network. Needs ffmpeg on PATH.
+// Node 22, standard library only, no network.
+//
+// Grader note (why the render is optional): the grader runs
+// `node /bot/main.ts` in a node:22-slim container (Node 22.23.4, no ffmpeg),
+// with /bot mounted read-only as user 65534 and only /output writable, and
+// all it needs from this program is VIDEO.json copied to the output dir
+// (kit RULES.txt: "Your program, main.ts at the root (Node 22), copies
+// VIDEO.json from the repository to /output; that is all it has to do").
+// So the VIDEO.json copy happens first, with stdlib only, and the ffmpeg
+// render below runs only when ffmpeg is actually on PATH (i.e. on a
+// developer machine). The posted video itself is unchanged: it was rendered
+// locally with this same code and is already public on TikTok.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+// The grader sets MAKEFUN_BOT_DIR=/bot and MAKEFUN_OUTPUT_DIR=/output.
+// Locally (no env vars) the repo root is both the bot dir and the parent of out/.
+const BOT_DIR = process.env.MAKEFUN_BOT_DIR ?? ROOT;
+const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? join(ROOT, "out");
 const ASSETS = join(ROOT, "assets");
-const TMP = join(ROOT, "tmp");
-const OUT_DIR = join(ROOT, "out");
-const OUT = join(OUT_DIR, "makefun-tiktok-ad-9x16.mp4");
+// Temp intermediates must never go under the repo: /bot is read-only in the
+// grader, so use the OS temp dir (writable there, 256 MB in the sandbox).
+const TMP = join(tmpdir(), "makefun-tiktok-ad-tmp");
+const OUT = join(OUTPUT_DIR, "makefun-tiktok-ad-9x16.mp4");
 
 // The entrant's own make.fun referral code, typed into the end card's field.
 // Override with: node main.ts --code=xxxxxxxx
@@ -60,10 +77,31 @@ function run(args: string[], label: string): void {
   }
 }
 
+// 0. Copy VIDEO.json to the output dir first, stdlib only. This is the one
+//    thing the grader needs, and it must succeed even where there is no
+//    ffmpeg and the repo is read-only — so it runs before any ffmpeg call.
+mkdirSync(OUTPUT_DIR, { recursive: true });
+try {
+  copyFileSync(join(BOT_DIR, "VIDEO.json"), join(OUTPUT_DIR, "VIDEO.json"));
+} catch {
+  fail(`could not copy VIDEO.json from ${BOT_DIR} to ${OUTPUT_DIR}.`);
+}
+console.log(`[done] copied VIDEO.json to ${join(OUTPUT_DIR, "VIDEO.json")}`);
+
+// The grader's node:22-slim image has no ffmpeg, so a missing ffmpeg is not
+// an error here: the render is skipped and the run still exits 0 with
+// VIDEO.json in place. Locally ffmpeg is present and the render runs as before.
+let hasFfmpeg = true;
 try {
   execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
 } catch {
-  fail("ffmpeg was not found on PATH. Install ffmpeg (https://ffmpeg.org/download.html) and run again.");
+  hasFfmpeg = false;
+}
+if (!hasFfmpeg) {
+  console.log(
+    "[render] ffmpeg not found on PATH — skipping video render (grader runtime has no ffmpeg; VIDEO.json is already in the output dir)."
+  );
+  process.exit(0);
 }
 
 for (const f of [
@@ -79,7 +117,6 @@ for (const f of [
   if (!existsSync(join(ASSETS, f))) fail(`missing asset: assets/${f}`);
 }
 mkdirSync(TMP, { recursive: true });
-mkdirSync(OUT_DIR, { recursive: true });
 
 // 1. Main segment: 19.5s, brand badge from frame 0, narration from assets/narration.wav.
 run(
